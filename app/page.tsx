@@ -1,8 +1,6 @@
 import InfiniteHorizontalScroll from "@/components/InfiniteHorizontalScroll";
-import InfiniteScroll from "@/components/InfiniteScroll";
+// import InfiniteScroll from "@/components/InfiniteScroll";
 import ProductContainer from "@/components/ProductContainer";
-import BackSliderHome from "@/components/svgs/back-slider-home";
-import CircleText from "@/components/svgs/circle-text";
 import { products } from "@/data/products.data";
 
 export default function Home() {
@@ -26,8 +24,8 @@ export default function Home() {
           />
         ))}
         gap={120}
-        speed={1}
-        smoothing={0.12}
+        speed={1.5}
+        smoothing={0.025}
       />
     </>
   );

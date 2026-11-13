@@ -18,6 +18,41 @@ interface InfiniteHorizontalScrollProps {
   className?: string;
 }
 
+/**
+ * Smoothly interpolates between rotation keyframes.
+ */
+const getRotation = (progress: number) => {
+  const keyframes = [
+    { position: -1, rotation: 0 },
+    { position: -0.5, rotation: -30 },
+    { position: 0, rotation: 20 },
+    { position: 0.5, rotation: -15 },
+    { position: 1, rotation: 0 },
+  ];
+
+  const index = keyframes.findIndex((frame) => frame.position >= progress);
+
+  if (index === -1) {
+    return keyframes[keyframes.length - 1].rotation;
+  }
+
+  if (index === 0) {
+    return keyframes[0].rotation;
+  }
+
+  const previous = keyframes[index - 1];
+  const next = keyframes[index];
+
+  let localProgress =
+    (progress - previous.position) / (next.position - previous.position);
+
+  localProgress = localProgress * localProgress * (3 - 2 * localProgress);
+
+  return (
+    previous.rotation + (next.rotation - previous.rotation) * localProgress
+  );
+};
+
 export default function InfiniteHorizontalScroll({
   items,
   speed = 1,
@@ -27,31 +62,103 @@ export default function InfiniteHorizontalScroll({
 }: InfiniteHorizontalScrollProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const circleTextRef = useRef<HTMLDivElement>(null);
 
-  // Always render at least 3 sequences:
-  // one to the left, one in the middle, and one to the right.
   const [copies, setCopies] = useState(3);
 
   useGSAP(
     () => {
       const viewport = viewportRef.current;
+      const circleText = circleTextRef.current;
 
       const elements = itemRefs.current.filter(
         (element): element is HTMLDivElement => !!element,
       );
 
-      if (!viewport || !elements.length || !items.length) return;
+      if (!viewport || !circleText || !elements.length || !items.length) {
+        return;
+      }
 
       let itemWidths: number[] = [];
       let itemPositions: number[] = [];
-
       let cycleWidth = 0;
 
       let current = 0;
       let target = 0;
 
+      // CircleText scroll rotation state.
+      let previousCurrent = 0;
+      let circleRotation = 0;
+
+      const rotationFactor = 0.005;
+
+      // Mouse displacement state.
+      const maxMouseDisplacement = 10;
+
+      let targetMouseX = 0;
+      let targetMouseY = 0;
+
+      let currentMouseX = 0;
+      let currentMouseY = 0;
+
+      // Controls how smoothly mouse displacement follows the cursor.
+      const mouseSmoothing = 0.1;
+
+      const updatePositions = () => {
+        if (!cycleWidth || !itemPositions.length) return;
+
+        const offset = ((current % cycleWidth) + cycleWidth) % cycleWidth;
+
+        const viewportWidth = viewport.clientWidth;
+        const viewportCenter = viewportWidth / 2;
+
+        elements.forEach((element, index) => {
+          const itemIndex = index % items.length;
+          const width = itemWidths[itemIndex];
+
+          const x = itemPositions[index] - offset;
+
+          const itemCenter = x + width / 2;
+          const distanceFromCenter = itemCenter - viewportCenter;
+
+          const progress = gsap.utils.clamp(
+            -1,
+            1,
+            distanceFromCenter / (viewportWidth / 2),
+          );
+
+          const distance = Math.abs(progress);
+
+          const isVisible = x + width > 0 && x < viewportWidth;
+
+          const scale = 1 - distance * 0.6;
+
+          const verticalOffset =
+            progress < 0 ? -progress * -150 : -progress * -150;
+
+          const rotation = getRotation(progress);
+
+          const blur = distance * 4;
+
+          // Apply mouse displacement in the same direction as the cursor.
+          gsap.set(element, {
+            x: x + currentMouseX,
+            y: currentMouseY,
+            yPercent: -50,
+          });
+
+          element.style.setProperty("--scroll-x", `${x}px`);
+          element.style.setProperty("--scroll-y", `${verticalOffset}px`);
+          element.style.setProperty("--scroll-progress", progress.toString());
+          element.style.setProperty("--scroll-distance", distance.toString());
+          element.style.setProperty("--scroll-visible", isVisible ? "1" : "0");
+          element.style.setProperty("--scroll-scale", scale.toString());
+          element.style.setProperty("--scroll-rotation", `${rotation}deg`);
+          element.style.setProperty("--scroll-blur", `${blur}px`);
+        });
+      };
+
       const measure = () => {
-        // The first sequence contains the original items.
         const originals = elements.slice(0, items.length);
 
         if (originals.length !== items.length) return;
@@ -62,9 +169,6 @@ export default function InfiniteHorizontalScroll({
 
         if (itemWidths.some((width) => width <= 0)) return;
 
-        // Calculate the complete width of one sequence.
-        // The final gap is intentional: it separates the last
-        // item of one sequence from the first item of the next.
         cycleWidth = itemWidths.reduce(
           (total, width) => total + width + gap,
           0,
@@ -72,8 +176,6 @@ export default function InfiniteHorizontalScroll({
 
         if (!cycleWidth) return;
 
-        // Make sure there are enough sequences to cover
-        // the viewport, including space for both edges.
         const requiredCopies = Math.max(
           3,
           Math.ceil(viewport.clientWidth / cycleWidth) + 3,
@@ -84,18 +186,14 @@ export default function InfiniteHorizontalScroll({
           return;
         }
 
-        // Calculate each item's position in the complete track.
         itemPositions = [];
 
         for (let copyIndex = 0; copyIndex < copies; copyIndex++) {
-          // The first sequence starts one cycle before zero.
           const sequenceOffset = (copyIndex - 1) * cycleWidth;
-
           let position = sequenceOffset;
 
           for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
             itemPositions.push(position);
-
             position += itemWidths[itemIndex] + gap;
           }
         }
@@ -103,25 +201,29 @@ export default function InfiniteHorizontalScroll({
         updatePositions();
       };
 
-      const updatePositions = () => {
-        if (!cycleWidth || !itemPositions.length) return;
+      // Mouse movement: calculate displacement relative to viewport centre.
+      const handlePointerMove = (event: PointerEvent) => {
+        const rect = viewport.getBoundingClientRect();
 
-        // Keep the offset within one complete sequence.
-        // This makes the reset visually seamless because
-        // an identical sequence is already beside it.
-        const offset = ((current % cycleWidth) + cycleWidth) % cycleWidth;
+        const normalizedX =
+          (event.clientX - rect.left - rect.width / 2) / (rect.width / 2);
 
-        elements.forEach((element, index) => {
-          const x = itemPositions[index] - offset;
+        const normalizedY =
+          (event.clientY - rect.top - rect.height / 2) / (rect.height / 2);
 
-          gsap.set(element, {
-            x,
-            yPercent: -50,
-          });
-        });
+        targetMouseX =
+          gsap.utils.clamp(-1, 1, normalizedX) * maxMouseDisplacement;
+
+        targetMouseY =
+          gsap.utils.clamp(-1, 1, normalizedY) * maxMouseDisplacement;
       };
 
-      // Mouse wheel and touch interaction.
+      // Return both elements to their original positions when the pointer leaves.
+      const handlePointerLeave = () => {
+        targetMouseX = 0;
+        targetMouseY = 0;
+      };
+
       const observer = Observer.create({
         target: viewport,
         type: "wheel,touch",
@@ -138,7 +240,6 @@ export default function InfiniteHorizontalScroll({
         },
       });
 
-      // Keyboard interaction.
       const handleKeyDown = (event: KeyboardEvent) => {
         if (
           event.target instanceof HTMLElement &&
@@ -159,36 +260,67 @@ export default function InfiniteHorizontalScroll({
         }
       };
 
-      // Recalculate positions when the viewport or items resize.
       const resizeObserver = new ResizeObserver(measure);
 
       resizeObserver.observe(viewport);
+      elements.forEach((element) => resizeObserver.observe(element));
 
-      elements.forEach((element) => {
-        resizeObserver.observe(element);
-      });
+      viewport.addEventListener("pointermove", handlePointerMove);
+      viewport.addEventListener("pointerleave", handlePointerLeave);
 
       measure();
 
-      // Smooth scrolling.
+      /**
+       * Shared GSAP ticker.
+       */
       const update = (_time: number, deltaTime: number) => {
         const alpha = 1 - Math.pow(1 - smoothing, deltaTime / 16.667);
 
         current += (target - current) * alpha;
 
+        /**
+         * CIRCLETEXT SCROLL ROTATION
+         */
+        const scrollDelta = current - previousCurrent;
+
+        circleRotation += scrollDelta * rotationFactor;
+
+        previousCurrent = current;
+
+        /**
+         * MOUSE DISPLACEMENT
+         *
+         * Products move with the mouse.
+         * CircleText moves against the mouse.
+         * BackSliderHome is unaffected.
+         */
+        const mouseAlpha = 1 - Math.pow(1 - mouseSmoothing, deltaTime / 16.667);
+
+        currentMouseX += (targetMouseX - currentMouseX) * mouseAlpha;
+        currentMouseY += (targetMouseY - currentMouseY) * mouseAlpha;
+
+        // Opposite displacement for CircleText.
+        gsap.set(circleText, {
+          x: -currentMouseX,
+          y: -currentMouseY,
+          rotation: circleRotation,
+        });
+
         updatePositions();
       };
 
       gsap.ticker.add(update);
-
       viewport.addEventListener("keydown", handleKeyDown);
 
       return () => {
         observer.kill();
         resizeObserver.disconnect();
-        gsap.ticker.remove(update);
 
+        viewport.removeEventListener("pointermove", handlePointerMove);
+        viewport.removeEventListener("pointerleave", handlePointerLeave);
         viewport.removeEventListener("keydown", handleKeyDown);
+
+        gsap.ticker.remove(update);
       };
     },
     {
@@ -204,8 +336,11 @@ export default function InfiniteHorizontalScroll({
       tabIndex={0}
       className={`relative isolate h-dvh w-full overflow-hidden touch-none outline-none ${className}`}
     >
-      {/* Repeated horizontal sequences */}
-      <div className="absolute inset-0 z-10 overflow-hidden">
+      {/* Moving product sequence */}
+      <div
+        data-scroll-viewport
+        className="absolute inset-0 z-10 overflow-hidden"
+      >
         {Array.from({ length: copies }).map((_, copyIndex) =>
           items.map((item, itemIndex) => {
             const index = copyIndex * items.length + itemIndex;
@@ -225,13 +360,19 @@ export default function InfiniteHorizontalScroll({
         )}
       </div>
 
-      {/* Stationary center element */}
+      {/* Stationary centre design */}
       <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
         <main className="flex h-dvh flex-col items-center justify-center lg:h-screen">
           <div className="relative mt-auto overflow-hidden">
             <BackSliderHome className="h-auto w-[76vw]" />
 
-            <CircleText className="absolute left-1/2 top-[18%] h-auto w-[85%] -translate-x-1/2" />
+            {/* CircleText positioning wrapper */}
+            <div className="absolute left-1/2 top-[18%] h-auto w-[85%] -translate-x-1/2">
+              {/* Independently rotating and displaced element */}
+              <div ref={circleTextRef} className="will-change-transform">
+                <CircleText className="h-auto w-full" />
+              </div>
+            </div>
           </div>
         </main>
       </div>
