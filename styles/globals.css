@@ -7,12 +7,24 @@
 
 @theme inline {
   --color-background: var(--background);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-poppins: var(--font-poppins);
+  --font-cor: var(--font-cormorant-garamond);
+}
+
+* {
+  @apply font-poppins;
 }
 
 body {
   background: var(--background);
-  /* color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif; */
+}
+
+.site-logo-full__icon {
+  @apply text-[#E94E1B];
+}
+.site-logo-full__farm {
+  @apply text-[#E94E1B];
+}
+.site-logo-full__wordmark {
+  @apply text-[#762431];
 }
