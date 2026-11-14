@@ -62,6 +62,7 @@ export default function InfiniteHorizontalScroll({
 }: InfiniteHorizontalScrollProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const motionRefs = useRef<(HTMLDivElement | null)[]>([]);
   const circleTextRef = useRef<HTMLDivElement>(null);
 
   const [copies, setCopies] = useState(3);
@@ -86,14 +87,18 @@ export default function InfiniteHorizontalScroll({
       let current = 0;
       let target = 0;
 
-      // CircleText scroll rotation state.
+      // CircleText rotation state.
       let previousCurrent = 0;
       let circleRotation = 0;
 
       const rotationFactor = 0.005;
 
-      // Mouse displacement state.
+      // Mouse displacement settings.
       const maxMouseDisplacement = 10;
+      const mouseSmoothing = 0.1;
+
+      // Adjust the maximum mouse-driven product rotation here.
+      const maxMouseRotation = 10;
 
       let targetMouseX = 0;
       let targetMouseY = 0;
@@ -101,8 +106,26 @@ export default function InfiniteHorizontalScroll({
       let currentMouseX = 0;
       let currentMouseY = 0;
 
-      // Controls how smoothly mouse displacement follows the cursor.
-      const mouseSmoothing = 0.1;
+      const handlePointerMove = (event: PointerEvent) => {
+        const rect = viewport.getBoundingClientRect();
+
+        const normalizedX =
+          (event.clientX - rect.left - rect.width / 2) / (rect.width / 2);
+
+        const normalizedY =
+          (event.clientY - rect.top - rect.height / 2) / (rect.height / 2);
+
+        targetMouseX =
+          gsap.utils.clamp(-1, 1, normalizedX) * maxMouseDisplacement;
+
+        targetMouseY =
+          gsap.utils.clamp(-1, 1, normalizedY) * maxMouseDisplacement;
+      };
+
+      const handlePointerLeave = () => {
+        targetMouseX = 0;
+        targetMouseY = 0;
+      };
 
       const updatePositions = () => {
         if (!cycleWidth || !itemPositions.length) return;
@@ -112,11 +135,34 @@ export default function InfiniteHorizontalScroll({
         const viewportWidth = viewport.clientWidth;
         const viewportCenter = viewportWidth / 2;
 
+        const mouseInfluence = gsap.utils.clamp(
+          -1,
+          1,
+          currentMouseX / maxMouseDisplacement,
+        );
+
+        // Same mouse rotation for every product.
+        const mouseRotation = gsap.utils.clamp(
+          -maxMouseRotation,
+          maxMouseRotation,
+          mouseInfluence * maxMouseRotation,
+        );
+
         elements.forEach((element, index) => {
+          const motionElement = motionRefs.current[index];
+
+          if (!motionElement) return;
+
           const itemIndex = index % items.length;
           const width = itemWidths[itemIndex];
 
           const x = itemPositions[index] - offset;
+
+          // Outer container: infinite scroll positioning.
+          gsap.set(element, {
+            x,
+            yPercent: -50,
+          });
 
           const itemCenter = x + width / 2;
           const distanceFromCenter = itemCenter - viewportCenter;
@@ -140,21 +186,38 @@ export default function InfiniteHorizontalScroll({
 
           const blur = distance * 4;
 
-          // Apply mouse displacement in the same direction as the cursor.
-          gsap.set(element, {
-            x: x + currentMouseX,
+          // Inner container: mouse movement and rotation.
+          gsap.set(motionElement, {
+            x: currentMouseX,
             y: currentMouseY,
-            yPercent: -50,
+            rotation: mouseRotation,
           });
 
-          element.style.setProperty("--scroll-x", `${x}px`);
-          element.style.setProperty("--scroll-y", `${verticalOffset}px`);
-          element.style.setProperty("--scroll-progress", progress.toString());
-          element.style.setProperty("--scroll-distance", distance.toString());
-          element.style.setProperty("--scroll-visible", isVisible ? "1" : "0");
-          element.style.setProperty("--scroll-scale", scale.toString());
-          element.style.setProperty("--scroll-rotation", `${rotation}deg`);
-          element.style.setProperty("--scroll-blur", `${blur}px`);
+          motionElement.style.setProperty("--scroll-y", `${verticalOffset}px`);
+
+          motionElement.style.setProperty(
+            "--scroll-progress",
+            progress.toString(),
+          );
+
+          motionElement.style.setProperty(
+            "--scroll-distance",
+            distance.toString(),
+          );
+
+          motionElement.style.setProperty(
+            "--scroll-visible",
+            isVisible ? "1" : "0",
+          );
+
+          motionElement.style.setProperty("--scroll-scale", scale.toString());
+
+          motionElement.style.setProperty(
+            "--scroll-rotation",
+            `${rotation}deg`,
+          );
+
+          motionElement.style.setProperty("--scroll-blur", `${blur}px`);
         });
       };
 
@@ -201,29 +264,6 @@ export default function InfiniteHorizontalScroll({
         updatePositions();
       };
 
-      // Mouse movement: calculate displacement relative to viewport centre.
-      const handlePointerMove = (event: PointerEvent) => {
-        const rect = viewport.getBoundingClientRect();
-
-        const normalizedX =
-          (event.clientX - rect.left - rect.width / 2) / (rect.width / 2);
-
-        const normalizedY =
-          (event.clientY - rect.top - rect.height / 2) / (rect.height / 2);
-
-        targetMouseX =
-          gsap.utils.clamp(-1, 1, normalizedX) * maxMouseDisplacement;
-
-        targetMouseY =
-          gsap.utils.clamp(-1, 1, normalizedY) * maxMouseDisplacement;
-      };
-
-      // Return both elements to their original positions when the pointer leaves.
-      const handlePointerLeave = () => {
-        targetMouseX = 0;
-        targetMouseY = 0;
-      };
-
       const observer = Observer.create({
         target: viewport,
         type: "wheel,touch",
@@ -265,9 +305,6 @@ export default function InfiniteHorizontalScroll({
       resizeObserver.observe(viewport);
       elements.forEach((element) => resizeObserver.observe(element));
 
-      viewport.addEventListener("pointermove", handlePointerMove);
-      viewport.addEventListener("pointerleave", handlePointerLeave);
-
       measure();
 
       /**
@@ -278,49 +315,45 @@ export default function InfiniteHorizontalScroll({
 
         current += (target - current) * alpha;
 
-        /**
-         * CIRCLETEXT SCROLL ROTATION
-         */
+        // Smooth mouse displacement.
+        const mouseAlpha = 1 - Math.pow(1 - mouseSmoothing, deltaTime / 16.667);
+
+        currentMouseX += (targetMouseX - currentMouseX) * mouseAlpha;
+
+        currentMouseY += (targetMouseY - currentMouseY) * mouseAlpha;
+
+        // CircleText rotation follows scroll direction.
         const scrollDelta = current - previousCurrent;
 
         circleRotation += scrollDelta * rotationFactor;
 
-        previousCurrent = current;
-
-        /**
-         * MOUSE DISPLACEMENT
-         *
-         * Products move with the mouse.
-         * CircleText moves against the mouse.
-         * BackSliderHome is unaffected.
-         */
-        const mouseAlpha = 1 - Math.pow(1 - mouseSmoothing, deltaTime / 16.667);
-
-        currentMouseX += (targetMouseX - currentMouseX) * mouseAlpha;
-        currentMouseY += (targetMouseY - currentMouseY) * mouseAlpha;
-
-        // Opposite displacement for CircleText.
+        // CircleText moves opposite to the mouse.
         gsap.set(circleText, {
           x: -currentMouseX,
           y: -currentMouseY,
           rotation: circleRotation,
         });
 
+        previousCurrent = current;
+
         updatePositions();
       };
 
       gsap.ticker.add(update);
+
       viewport.addEventListener("keydown", handleKeyDown);
+      viewport.addEventListener("pointermove", handlePointerMove);
+      viewport.addEventListener("pointerleave", handlePointerLeave);
 
       return () => {
         observer.kill();
         resizeObserver.disconnect();
 
+        gsap.ticker.remove(update);
+
+        viewport.removeEventListener("keydown", handleKeyDown);
         viewport.removeEventListener("pointermove", handlePointerMove);
         viewport.removeEventListener("pointerleave", handlePointerLeave);
-        viewport.removeEventListener("keydown", handleKeyDown);
-
-        gsap.ticker.remove(update);
       };
     },
     {
@@ -351,9 +384,17 @@ export default function InfiniteHorizontalScroll({
                 ref={(element) => {
                   itemRefs.current[index] = element;
                 }}
-                className="absolute left-0 top-1/2 w-max will-change-transform"
+                className="absolute left-0 top-1/2 w-max"
               >
-                {item}
+                {/* Mouse motion layer */}
+                <div
+                  ref={(element) => {
+                    motionRefs.current[index] = element;
+                  }}
+                  className="will-change-transform"
+                >
+                  {item}
+                </div>
               </div>
             );
           }),
@@ -368,7 +409,6 @@ export default function InfiniteHorizontalScroll({
 
             {/* CircleText positioning wrapper */}
             <div className="absolute left-1/2 top-[18%] h-auto w-[85%] -translate-x-1/2">
-              {/* Independently rotating and displaced element */}
               <div ref={circleTextRef} className="will-change-transform">
                 <CircleText className="h-auto w-full" />
               </div>

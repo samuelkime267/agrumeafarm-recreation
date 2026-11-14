@@ -23,7 +23,7 @@ export default function Home() {
             labelImg={labelImg}
           />
         ))}
-        gap={120}
+        gap={110}
         speed={1.5}
         smoothing={0.025}
       />
